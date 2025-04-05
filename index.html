@@ -1,7 +1,545 @@
 <!DOCTYPE html>
-<html><head><title>貪食蛇遊戲</title></head>
-<body><h1>貪食蛇遊戲</h1>
-<canvas id="canvas"></canvas>
-<script src="https://cdn.jsdelivr.net/pyodide/v0.23.4/full/pyodide.js"></script>
-<script>async function main() { console.log("Loading Pyodide..."); }</script>
-</body></html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>貪食蛇遊戲 - 網頁版</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            background-color: #f0f0f0;
+            font-family: Arial, sans-serif;
+        }
+        #pygame-container {
+            position: relative;
+            display: inline-block;
+            margin-top: 20px;
+            border: 2px solid #333;
+            border-radius: 5px;
+            overflow: hidden;
+        }
+        #loading {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            font-size: 24px;
+            z-index: 10;
+        }
+        h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            color: #333;
+        }
+        p {
+            margin-bottom: 20px;
+            color: #666;
+            max-width: 600px;
+            text-align: center;
+        }
+        #console {
+            margin-top: 20px;
+            width: 600px;
+            padding: 10px;
+            background-color: #333;
+            color: #fff;
+            font-family: monospace;
+            border-radius: 5px;
+            max-height: 200px;
+            overflow-y: auto;
+            display: none;
+        }
+        #debug-toggle {
+            margin-top: 10px;
+            padding: 5px 10px;
+            background-color: #555;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <h1>貪食蛇遊戲 - 網頁版</h1>
+    <p>使用方向鍵控制蛇的移動，點擊暫停按鈕可以暫停遊戲。</p>
+    
+    <div id="pygame-container">
+        <div id="loading">載入中，請稍候...</div>
+        <canvas id="canvas" width="600" height="400" oncontextmenu="event.preventDefault()" tabindex="1"></canvas>
+    </div>
+    
+    <button id="debug-toggle">顯示除錯信息</button>
+    <div id="console"></div>
+
+    <script>
+        // 自定義控制台輸出
+        const consoleDiv = document.getElementById('console');
+        const debugToggle = document.getElementById('debug-toggle');
+        
+        // 顯示/隱藏除錯信息
+        debugToggle.addEventListener('click', function() {
+            if (consoleDiv.style.display === 'none' || !consoleDiv.style.display) {
+                consoleDiv.style.display = 'block';
+                debugToggle.textContent = '隱藏除錯信息';
+            } else {
+                consoleDiv.style.display = 'none';
+                debugToggle.textContent = '顯示除錯信息';
+            }
+        });
+        
+        // 顯示所有錯誤
+        window.onerror = function(message, source, lineno, colno, error) {
+            logToConsole("錯誤: " + message);
+            return false;
+        };
+        
+        // 自定義日誌函數
+        function logToConsole(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            consoleDiv.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+            console.log(message);
+        }
+
+        // 全局的Canvas更新函數
+        window.updateCanvas = function(data, width, height) {
+            logToConsole("嘗試更新Canvas: " + width + "x" + height);
+            try {
+                const canvas = document.getElementById('canvas');
+                const ctx = canvas.getContext('2d');
+                
+                // 創建ImageData並更新到canvas
+                const array = new Uint8ClampedArray(data);
+                const imgData = new ImageData(array, width, height);
+                ctx.putImageData(imgData, 0, 0);
+                logToConsole("Canvas更新成功");
+            } catch(e) {
+                logToConsole("更新Canvas時出錯: " + e.message);
+            }
+        };
+        
+        // 簡易版貪食蛇遊戲
+        class SimpleSnakeGame {
+            constructor(canvas) {
+                this.canvas = canvas;
+                this.ctx = canvas.getContext('2d');
+                this.width = canvas.width;
+                this.height = canvas.height;
+                this.gridSize = 20;
+                this.fps = 10;
+                
+                // 顏色
+                this.colors = {
+                    background: '#000000',
+                    snake: '#00FF00',
+                    snakeHead: '#00CC00',
+                    food: '#FF0000',
+                    grid: '#282828',
+                    text: '#FFFFFF'
+                };
+                
+                // 蛇的初始位置
+                this.snake = [
+                    {x: 100, y: 100},
+                    {x: 80, y: 100},
+                    {x: 60, y: 100}
+                ];
+                
+                // 方向
+                this.directions = {
+                    up: {x: 0, y: -1},
+                    down: {x: 0, y: 1},
+                    left: {x: -1, y: 0},
+                    right: {x: 1, y: 0}
+                };
+                
+                this.direction = this.directions.right;
+                this.food = this.generateFood();
+                this.score = 0;
+                this.gameOver = false;
+                this.paused = false;
+                
+                // 事件監聽
+                document.addEventListener('keydown', this.handleKeyDown.bind(this));
+                
+                // 開始遊戲循環
+                this.lastTime = 0;
+                this.interval = 1000 / this.fps;
+                this.startScreen();
+            }
+            
+            startScreen() {
+                logToConsole("顯示開始畫面");
+                this.ctx.fillStyle = this.colors.background;
+                this.ctx.fillRect(0, 0, this.width, this.height);
+                
+                this.ctx.fillStyle = this.colors.text;
+                this.ctx.font = '48px Arial';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText('Snake Game', this.width/2, this.height/2 - 80);
+                
+                this.ctx.font = '24px Arial';
+                this.ctx.fillText('Use arrow keys to control snake', this.width/2, this.height/2 - 30);
+                
+                // 開始按鈕
+                this.ctx.fillStyle = this.colors.snake;
+                const btnX = this.width/2 - 100;
+                const btnY = this.height/2 + 10;
+                const btnWidth = 200;
+                const btnHeight = 50;
+                this.ctx.fillRect(btnX, btnY, btnWidth, btnHeight);
+                
+                this.ctx.strokeStyle = this.colors.text;
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(btnX, btnY, btnWidth, btnHeight);
+                
+                this.ctx.fillStyle = this.colors.text;
+                this.ctx.fillText('Start Game', this.width/2, this.height/2 + 40);
+                
+                // 添加開始按鈕點擊處理
+                this.canvas.onclick = (e) => {
+                    const rect = this.canvas.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+                    
+                    if (mouseX >= btnX && mouseX <= btnX + btnWidth &&
+                        mouseY >= btnY && mouseY <= btnY + btnHeight) {
+                        this.canvas.onclick = null;
+                        this.startGame();
+                    }
+                };
+                
+                // 空白鍵也可以開始
+                this.startKeyHandler = (e) => {
+                    if (e.key === ' ' || e.key === 'Space') {
+                        document.removeEventListener('keydown', this.startKeyHandler);
+                        this.startGame();
+                    }
+                };
+                
+                document.addEventListener('keydown', this.startKeyHandler);
+            }
+            
+            startGame() {
+                logToConsole("遊戲開始");
+                this.gameOver = false;
+                this.paused = false;
+                this.score = 0;
+                this.snake = [
+                    {x: 100, y: 100},
+                    {x: 80, y: 100},
+                    {x: 60, y: 100}
+                ];
+                this.direction = this.directions.right;
+                this.food = this.generateFood();
+                
+                // 開始遊戲循環
+                requestAnimationFrame(this.gameLoop.bind(this));
+            }
+            
+            gameLoop(timestamp) {
+                if (this.gameOver) return;
+                
+                // 計算時間差
+                if (!this.lastTime) this.lastTime = timestamp;
+                const elapsed = timestamp - this.lastTime;
+                
+                if (elapsed > this.interval) {
+                    this.lastTime = timestamp - (elapsed % this.interval);
+                    
+                    if (!this.paused) {
+                        this.update();
+                    }
+                    
+                    this.draw();
+                }
+                
+                requestAnimationFrame(this.gameLoop.bind(this));
+            }
+            
+            update() {
+                // 移動蛇
+                const head = {
+                    x: this.snake[0].x + this.direction.x * this.gridSize,
+                    y: this.snake[0].y + this.direction.y * this.gridSize
+                };
+                
+                // 檢查是否吃到食物
+                if (head.x === this.food.x && head.y === this.food.y) {
+                    this.score++;
+                    this.food = this.generateFood();
+                } else {
+                    this.snake.pop();
+                }
+                
+                // 檢查碰撞
+                if (head.x < 0 || head.x >= this.width || 
+                    head.y < 0 || head.y >= this.height || 
+                    this.snake.some(segment => segment.x === head.x && segment.y === head.y)) {
+                    this.gameOver = true;
+                    this.showGameOverScreen();
+                    return;
+                }
+                
+                this.snake.unshift(head);
+            }
+            
+            draw() {
+                // 清空畫布
+                this.ctx.fillStyle = this.colors.background;
+                this.ctx.fillRect(0, 0, this.width, this.height);
+                
+                // 繪製網格
+                this.drawGrid();
+                
+                // 繪製蛇
+                this.drawSnake();
+                
+                // 繪製食物
+                this.drawFood();
+                
+                // 繪製分數
+                this.ctx.fillStyle = this.colors.text;
+                this.ctx.font = '20px Arial';
+                this.ctx.textAlign = 'left';
+                this.ctx.fillText(`Score: ${this.score}`, 10, 30);
+                
+                // 如果遊戲暫停，顯示暫停信息
+                if (this.paused) {
+                    this.ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+                    this.ctx.fillRect(0, 0, this.width, this.height);
+                    
+                    this.ctx.fillStyle = this.colors.text;
+                    this.ctx.font = '36px Arial';
+                    this.ctx.textAlign = 'center';
+                    this.ctx.fillText('Game Paused', this.width/2, this.height/2 - 30);
+                    
+                    // 繼續按鈕
+                    this.ctx.fillStyle = this.colors.snake;
+                    const btnX = this.width/2 - 50;
+                    const btnY = this.height/2 + 10;
+                    const btnWidth = 100;
+                    const btnHeight = 40;
+                    this.ctx.fillRect(btnX, btnY, btnWidth, btnHeight);
+                    
+                    this.ctx.strokeStyle = this.colors.text;
+                    this.ctx.lineWidth = 2;
+                    this.ctx.strokeRect(btnX, btnY, btnWidth, btnHeight);
+                    
+                    this.ctx.fillStyle = this.colors.text;
+                    this.ctx.font = '20px Arial';
+                    this.ctx.fillText('Resume', this.width/2, this.height/2 + 32);
+                }
+            }
+            
+            drawGrid() {
+                this.ctx.strokeStyle = this.colors.grid;
+                
+                // 繪製垂直線
+                for (let x = 0; x <= this.width; x += this.gridSize) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(x, 0);
+                    this.ctx.lineTo(x, this.height);
+                    this.ctx.stroke();
+                }
+                
+                // 繪製水平線
+                for (let y = 0; y <= this.height; y += this.gridSize) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(0, y);
+                    this.ctx.lineTo(this.width, y);
+                    this.ctx.stroke();
+                }
+            }
+            
+            drawSnake() {
+                // 繪製蛇身
+                for (let i = 1; i < this.snake.length; i++) {
+                    this.ctx.fillStyle = this.colors.snake;
+                    this.ctx.fillRect(
+                        this.snake[i].x, 
+                        this.snake[i].y, 
+                        this.gridSize, 
+                        this.gridSize
+                    );
+                }
+                
+                // 繪製蛇頭
+                this.ctx.fillStyle = this.colors.snakeHead;
+                this.ctx.fillRect(
+                    this.snake[0].x, 
+                    this.snake[0].y, 
+                    this.gridSize, 
+                    this.gridSize
+                );
+            }
+            
+            drawFood() {
+                this.ctx.fillStyle = this.colors.food;
+                this.ctx.fillRect(
+                    this.food.x, 
+                    this.food.y, 
+                    this.gridSize, 
+                    this.gridSize
+                );
+            }
+            
+            generateFood() {
+                let food;
+                do {
+                    const x = Math.floor(Math.random() * (this.width / this.gridSize)) * this.gridSize;
+                    const y = Math.floor(Math.random() * (this.height / this.gridSize)) * this.gridSize;
+                    food = {x, y};
+                } while (this.snake.some(segment => segment.x === food.x && segment.y === food.y));
+                
+                return food;
+            }
+            
+            handleKeyDown(e) {
+                if (this.gameOver) return;
+                
+                // 控制暫停
+                if (e.key === 'p' || e.key === 'P') {
+                    this.paused = !this.paused;
+                    return;
+                }
+                
+                if (this.paused) {
+                    // 如果是暫停狀態，空格鍵可以繼續遊戲
+                    if (e.key === ' ' || e.key === 'Space') {
+                        this.paused = false;
+                    }
+                    return;
+                }
+                
+                // 控制方向
+                switch (e.key) {
+                    case 'ArrowUp':
+                        if (this.direction !== this.directions.down) {
+                            this.direction = this.directions.up;
+                        }
+                        break;
+                    case 'ArrowDown':
+                        if (this.direction !== this.directions.up) {
+                            this.direction = this.directions.down;
+                        }
+                        break;
+                    case 'ArrowLeft':
+                        if (this.direction !== this.directions.right) {
+                            this.direction = this.directions.left;
+                        }
+                        break;
+                    case 'ArrowRight':
+                        if (this.direction !== this.directions.left) {
+                            this.direction = this.directions.right;
+                        }
+                        break;
+                }
+            }
+            
+            showGameOverScreen() {
+                logToConsole("遊戲結束，分數: " + this.score);
+                this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+                this.ctx.fillRect(0, 0, this.width, this.height);
+                
+                this.ctx.fillStyle = this.colors.text;
+                this.ctx.font = '36px Arial';
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText(`Game Over! Your Score: ${this.score}`, this.width/2, this.height/2 - 40);
+                
+                // 重新開始按鈕
+                this.ctx.fillStyle = this.colors.snake;
+                const restartBtnX = this.width/2 - 210;
+                const btnY = this.height/2 + 30;
+                const btnWidth = 200;
+                const btnHeight = 50;
+                this.ctx.fillRect(restartBtnX, btnY, btnWidth, btnHeight);
+                
+                this.ctx.strokeStyle = this.colors.text;
+                this.ctx.lineWidth = 2;
+                this.ctx.strokeRect(restartBtnX, btnY, btnWidth, btnHeight);
+                
+                this.ctx.fillStyle = this.colors.text;
+                this.ctx.font = '24px Arial';
+                this.ctx.fillText('Restart', this.width/2 - 110, this.height/2 + 55);
+                
+                // 退出按鈕
+                this.ctx.fillStyle = 'red';
+                const quitBtnX = this.width/2 + 10;
+                this.ctx.fillRect(quitBtnX, btnY, btnWidth, btnHeight);
+                
+                this.ctx.strokeStyle = this.colors.text;
+                this.ctx.strokeRect(quitBtnX, btnY, btnWidth, btnHeight);
+                
+                this.ctx.fillStyle = this.colors.text;
+                this.ctx.fillText('Quit', this.width/2 + 110, this.height/2 + 55);
+                
+                // 添加按鈕點擊事件
+                this.canvas.onclick = (e) => {
+                    const rect = this.canvas.getBoundingClientRect();
+                    const mouseX = e.clientX - rect.left;
+                    const mouseY = e.clientY - rect.top;
+                    
+                    if (mouseX >= restartBtnX && mouseX <= restartBtnX + btnWidth &&
+                        mouseY >= btnY && mouseY <= btnY + btnHeight) {
+                        // 重新開始
+                        this.startGame();
+                    } else if (mouseX >= quitBtnX && mouseX <= quitBtnX + btnWidth &&
+                               mouseY >= btnY && mouseY <= btnY + btnHeight) {
+                        // 退出（回到開始畫面）
+                        this.canvas.onclick = null;
+                        this.startScreen();
+                    }
+                };
+                
+                // 鍵盤事件
+                this.gameOverKeyHandler = (e) => {
+                    if (e.key === 'r' || e.key === 'R') {
+                        document.removeEventListener('keydown', this.gameOverKeyHandler);
+                        this.startGame();
+                    } else if (e.key === 'q' || e.key === 'Q') {
+                        document.removeEventListener('keydown', this.gameOverKeyHandler);
+                        this.startScreen();
+                    }
+                };
+                
+                document.addEventListener('keydown', this.gameOverKeyHandler);
+            }
+        }
+        
+        async function main() {
+            logToConsole("開始載入遊戲...");
+            try {
+                // 隱藏載入訊息
+                document.getElementById('loading').style.display = 'none';
+                
+                // 使用純JavaScript實現的貪食蛇遊戲
+                const canvas = document.getElementById('canvas');
+                const game = new SimpleSnakeGame(canvas);
+                logToConsole("遊戲已初始化");
+                
+            } catch (error) {
+                logToConsole("載入遊戲時出錯: " + error.message);
+                document.getElementById('loading').textContent = "載入失敗: " + error.message;
+                document.getElementById('loading').style.display = 'block';
+                console.error(error);
+            }
+        }
+        
+        main();
+    </script>
+</body>
+</html>
